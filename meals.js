@@ -1048,14 +1048,6 @@ window.MEALS = [
 "cat": "home"
 },
 {
-"id": "IMG_6983",
-"src": "photos/IMG_6983.jpg",
-"name": "Chicken Kizhi Parota (search it up)",
-"price": "$$",
-"place": "Restaurant",
-"cat": "other"
-},
-{
 "id": "IMG_6984",
 "src": "photos/IMG_6984.jpg",
 "name": "Chicken Kizhi Parotta",
