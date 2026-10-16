@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scran Battle</title>
+<meta name="description" content="Which would you rather eat? 10 rounds of head-to-head scran.">
+<style>
+  :root { --bg:#faf7f2; --fg:#2b2622; --card:#fff; --muted:#8a8178; --accent:#e4572e; --line:#e8e1d7; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1c1a18; --fg:#f2ece4; --card:#2a2724; --muted:#9b9288; --accent:#ff7a4d; --line:#3a3631; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); }
+  h1 { font-size:20px; margin:0; }
+  .round { color:var(--muted); font-variant-numeric:tabular-nums; }
+  main { max-width:1000px; margin:0 auto; padding:16px; }
+  .q { text-align:center; font-weight:600; margin:4px 0 14px; }
+  .battle { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .opt { background:var(--card); border:2px solid var(--line); border-radius:14px; overflow:hidden; cursor:pointer; padding:0; text-align:left;
+         font:inherit; color:inherit; transition:transform .12s, border-color .12s, opacity .2s; }
+  .opt:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .opt.win { border-color:var(--accent); transform:scale(1.02); }
+  .opt.lose { opacity:.35; }
+  .opt img { display:block; width:100%; aspect-ratio:1; object-fit:cover; background:var(--line); }
+  .opt .t { display:block; padding:10px 14px 2px; font-weight:600; }
+  .opt .s { display:block; padding:0 14px 12px; color:var(--muted); font-size:14px; }
+  .hint { text-align:center; color:var(--muted); margin:14px 0; font-size:14px; }
+  .done { text-align:center; padding:80px 0; }
+  .done h2 { font-size:28px; margin:0 0 20px; }
+  .play { font:inherit; font-weight:600; padding:12px 26px; border-radius:10px; border:none; background:var(--accent); color:#fff; cursor:pointer; }
+  .dots { display:flex; gap:6px; justify-content:center; margin:0 0 12px; }
+  .dots i { width:8px; height:8px; border-radius:50%; background:var(--line); }
+  .dots i.on { background:var(--accent); }
+  @media (max-width:560px) { .battle { gap:8px; } .opt .t { font-size:14px; padding:8px 10px 2px; } .opt .s { font-size:12px; padding:0 10px 10px; } }
+</style>
+</head>
+<body>
+<header><h1>🍽️ Scran Battle</h1><span class="round" id="round"></span></header>
+<main id="view"></main>
+<script src="meals.js"></script>
+<script>
+const SUPABASE_URL = 'https://lzfrqxsoerdzztelzirm.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_igW8P7JdHMnSooySj6ZxQg_WHIK7pCt';  // publishable: safe in the browser, RLS allows insert only
+const ROUNDS = [['dining', 2], ['home', 2], ['other', 6]];
+
+const MEALS = window.MEALS, byId = Object.fromEntries(MEALS.map(m => [m.id, m]));
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+
+// ---- per-browser memory: which pairs this person has already seen, and how often each photo has appeared ----
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem('scran:' + k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('scran:' + k, JSON.stringify(v)); } catch {} },
+};
+const seen = store.get('seenPairs', {});   // "idA|idB" -> timestamp last shown
+const uses = store.get('uses', {});        // id -> times shown
+let session = store.get('session', null);
+if (!session) { session = Math.random().toString(36).slice(2) + Date.now().toString(36); store.set('session', session); }
+const pairKey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+
+// Pick k pairs from one category: never a pair this browser has seen (unless every pair is used up, then the
+// longest-ago one), never a photo twice in one game, and favour photos shown the fewest times.
+function pickPairs(cat, k, used) {
+  const pool = MEALS.filter(m => m.cat === cat && !used.has(m.id));
+  const out = [];
+  for (let n = 0; n < k; n++) {
+    const avail = pool.filter(m => !used.has(m.id));
+    let best = null, bestScore = Infinity;
+    for (let i = 0; i < avail.length; i++) for (let j = i + 1; j < avail.length; j++) {
+      const a = avail[i], b = avail[j], s = seen[pairKey(a.id, b.id)];
+      const score = (s ? 1e13 + s : 0) + (uses[a.id] || 0) + (uses[b.id] || 0) + Math.random() * 0.9;
+      if (score < bestScore) { bestScore = score; best = [a, b]; }
+    }
+    if (!best) break;
+    best.forEach(m => used.add(m.id));
+    out.push({ cat, pair: Math.random() < 0.5 ? best : best.reverse() });
+  }
+  return out;
+}
+function newGame() {
+  const used = new Set();
+  let rounds = ROUNDS.flatMap(([cat, k]) => pickPairs(cat, k, used));
+  if (rounds.length < 10) rounds = rounds.concat(pickPairs('other', 10 - rounds.length, used));  // safety net
+  for (let i = rounds.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rounds[i], rounds[j]] = [rounds[j], rounds[i]]; }
+  rounds.forEach(r => r.pair.forEach(m => { new Image().src = m.src; }));  // preload this game's photos
+  return rounds;
+}
+
+// ---- votes: sent to Supabase; failed sends are queued and retried on the next vote / visit ----
+let queue = store.get('queue', []);
+async function flush() {
+  if (!queue.length) return;
+  const batch = queue.slice();
+  try {
+    const r = await fetch(SUPABASE_URL + '/rest/v1/votes', {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(batch),
+    });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    queue = queue.slice(batch.length); store.set('queue', queue);
+  } catch (e) { console.warn('vote not sent yet, will retry', e); }
+}
+
+// ---- game ----
+let game = [], idx = 0, busy = false;
+const sub = m => [...new Set([m.price, m.place].filter(Boolean))].join(' · ');
+function render() {
+  const v = $('view');
+  if (idx >= game.length) {
+    $('round').textContent = '';
+    v.innerHTML = `<div class="done"><h2>Thanks for your opinion!</h2><button class="play" id="again">Play again</button></div>`;
+    $('again').onclick = start;
+    return;
+  }
+  const { pair } = game[idx];
+  $('round').textContent = `Round ${idx + 1} / ${game.length}`;
+  v.innerHTML = `<div class="dots">${game.map((_, i) => `<i class="${i <= idx ? 'on' : ''}"></i>`).join('')}</div>
+    <div class="q">Which would you rather eat?</div>
+    <div class="battle">${pair.map((m, i) =>
+      `<button class="opt" data-i="${i}"><img src="${m.src}" alt="${esc(m.name)}"><span class="t">${esc(m.name)}</span><span class="s">${esc(sub(m))}</span></button>`).join('')}</div>
+    <div class="hint">Tap one, or press ← / →</div>`;
+  v.querySelectorAll('.opt').forEach(el => el.onclick = () => choose(+el.dataset.i));
+}
+function choose(i) {
+  if (busy || idx >= game.length) return;
+  busy = true;
+  const { cat, pair } = game[idx], win = pair[i], lose = pair[1 - i];
+  seen[pairKey(win.id, lose.id)] = Date.now(); store.set('seenPairs', seen);
+  pair.forEach(m => uses[m.id] = (uses[m.id] || 0) + 1); store.set('uses', uses);
+  queue.push({ winner: win.id, loser: lose.id, category: cat, session_id: session, round: idx + 1 }); store.set('queue', queue);
+  flush();
+  document.querySelectorAll('.opt').forEach((el, j) => el.classList.add(j === i ? 'win' : 'lose'));
+  setTimeout(() => { idx++; busy = false; render(); }, 280);
+}
+function start() { game = newGame(); idx = 0; render(); }
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') choose(0);
+  if (e.key === 'ArrowRight') choose(1);
+});
+flush();
+start();
+</script>
+</body>
+</html>
